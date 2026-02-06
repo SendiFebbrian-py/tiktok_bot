@@ -1,0 +1,14 @@
+# lindungi env
+.env
+
+# python
+__pycache__/
+*.pyc
+
+# virtual env
+venv/
+.env/
+
+# system
+.DS_Store
+Thumbs.db
