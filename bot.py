@@ -41,14 +41,14 @@ API_URL = "https://tikwm.com/api/"
 TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
 # =========================
-# ADS TIMER
+# ADS TIMER SYSTEM
 # =========================
 ads_timer = {}
 ADS_DURATION = 10
 
 
 # =========================
-# KEYBOARD MENU (BOTTOM)
+# KEYBOARD MENU
 # =========================
 def main_keyboard():
 
@@ -62,7 +62,7 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True,
-        persistent=True
+        is_persistent=True   # FIXED
     )
 
 
@@ -171,7 +171,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ACCOUNT
+# ACCOUNT MENU
 # =========================
 async def show_account(update: Update):
 
@@ -195,7 +195,7 @@ async def show_account(update: Update):
 
 
 # =========================
-# PREMIUM
+# PREMIUM MENU
 # =========================
 async def show_premium(update: Update):
 
@@ -219,7 +219,7 @@ async def show_premium(update: Update):
 
 
 # =========================
-# TRIPAY
+# TRIPAY CREATE
 # =========================
 def create_tripay(user_id):
 
@@ -287,7 +287,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"⏳ Tunggu {int(cooldown_time)} detik"
         )
-
         return
 
 
@@ -384,7 +383,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         format_choice = choice.replace("check_", "")
         context.user_data["format"] = format_choice
 
-        # skip ads jika premium atau first download
+        # premium atau first download skip ads
         if user["premium"] or user["download_count"] == 0:
 
             await start_download_process(query, context)
@@ -408,8 +407,6 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         asyncio.create_task(wait_and_send(query, context, user_id))
-
-        return
 
 
 # =========================
@@ -481,9 +478,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("Bot running with auto ads timer")
+    print("Bot running successfully")
 
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
