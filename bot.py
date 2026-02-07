@@ -3,7 +3,10 @@ import re
 import time
 import asyncio
 import requests
+import random
+
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
 from telegram import (
     Update,
@@ -25,89 +28,115 @@ from telegram.ext import (
 # LOAD ENV
 # =========================
 load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 API_URL = "https://tikwm.com/api/"
 TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
+
+# =========================
+# USER FUNCTIONS
+# =========================
+def get_user(user):
+
+    result = supabase.table("users") \
+        .select("*") \
+        .eq("id", user.id) \
+        .execute()
+
+    if result.data:
+
+        return result.data[0]
+
+    # create new user
+    supabase.table("users").insert({
+        "id": user.id,
+        "username": user.username or "",
+        "download_count": 0,
+        "premium": False
+    }).execute()
+
+    return {
+        "id": user.id,
+        "premium": False,
+        "download_count": 0
+    }
+
+
+def increment_download(user_id):
+
+    supabase.rpc(
+        "increment_download",
+        {"uid": user_id}
+    ).execute()
+
+
+# =========================
+# ADS SYSTEM
+# =========================
+def get_ads():
+
+    result = supabase.table("ads_links") \
+        .select("url") \
+        .eq("active", True) \
+        .execute()
+
+    if result.data:
+
+        return random.choice(result.data)["url"]
+
+    return "https://example.com"
+
+
 # =========================
 # ANTI SPAM
 # =========================
-USER_COOLDOWN = 5
-user_last_request = {}
-
+cooldown = {}
 
 def is_spam(user_id):
+
     now = time.time()
 
-    if user_id in user_last_request:
-        diff = now - user_last_request[user_id]
+    if user_id in cooldown:
 
-        if diff < USER_COOLDOWN:
-            return USER_COOLDOWN - diff
+        diff = now - cooldown[user_id]
 
-    user_last_request[user_id] = now
+        if diff < 5:
+
+            return 5 - diff
+
+    cooldown[user_id] = now
+
     return 0
-
-
-# =========================
-# LOADING PROGRESS
-# =========================
-async def show_progress(message):
-
-    steps = [
-        "🔍 Mendapatkan info...",
-        "📡 Menghubungi server TikTok...",
-        "⚙️ Memproses media...",
-        "📦 Menyiapkan opsi download..."
-    ]
-
-    for step in steps:
-        try:
-            await message.edit_text(step)
-            await asyncio.sleep(0.7)
-        except:
-            break
 
 
 # =========================
 # START
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    get_user(update.effective_user)
+
     await update.message.reply_text(
         "📥 Kirim link TikTok\n\n"
-        "Support:\n"
-        "• Video → MP4 / MP3\n"
-        "• Slide → Gambar / MP3\n\n"
-        "☕ Support admin:\n"
-        "https://clicky.id/kang-banjar/support/coffee"
+        "Download pertama gratis.\n"
+        "Seterusnya harus lihat iklan atau premium."
     )
 
 
 # =========================
-# Extract URL
+# EXTRACT URL
 # =========================
-def extract_tiktok_url(text):
+def extract_url(text):
 
     match = re.search(TIKTOK_REGEX, text)
 
-    if match:
-        return match.group(0)
-
-    return None
-
-
-# =========================
-# Resolve redirect
-# =========================
-def resolve_redirect(url):
-
-    try:
-        r = requests.get(url, allow_redirects=True, timeout=10)
-        return r.url
-
-    except:
-        return url
+    return match.group(0) if match else None
 
 
 # =========================
@@ -115,93 +144,72 @@ def resolve_redirect(url):
 # =========================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user_id = update.effective_user.id
+    user = update.effective_user
 
-    # ANTI SPAM CHECK
-    cooldown = is_spam(user_id)
+    cooldown_time = is_spam(user.id)
 
-    if cooldown > 0:
+    if cooldown_time > 0:
+
         await update.message.reply_text(
-            f"⏳ Tunggu {int(cooldown)} detik sebelum request lagi"
+            f"Tunggu {int(cooldown_time)} detik"
         )
+
         return
 
-    text = update.message.text
 
-    url = extract_tiktok_url(text)
+    url = extract_url(update.message.text)
 
     if not url:
         return
 
-    msg = await update.message.reply_text("⏳ Memulai...")
 
-    # show progress animation
-    progress_task = asyncio.create_task(show_progress(msg))
+    msg = await update.message.reply_text("Processing...")
+
 
     try:
 
-        url = resolve_redirect(url)
-
-        res = requests.get(API_URL, params={"url": url}, timeout=30)
+        res = requests.get(API_URL, params={"url": url})
 
         json_data = res.json()
 
         if json_data["code"] != 0:
-            await msg.edit_text("❌ Gagal mengambil media")
+
+            await msg.edit_text("Error")
+
             return
+
 
         data = json_data["data"]
 
-        # simpan data
-        context.user_data["tiktok_data"] = data
+        context.user_data["data"] = data
+        context.user_data["url"] = url
 
-        progress_task.cancel()
 
-        # =========================
-        # SLIDE
-        # =========================
         if data.get("images"):
 
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🖼️ Download Gambar", callback_data="dl_images"),
-                    InlineKeyboardButton("🎵 Download MP3", callback_data="dl_mp3")
+                    InlineKeyboardButton("Download Images", callback_data="check_images"),
+                    InlineKeyboardButton("Download MP3", callback_data="check_mp3")
                 ]
             ])
 
-            await msg.edit_text(
-                "📸 Slide terdeteksi\nPilih format:",
-                reply_markup=keyboard
-            )
-
-            return
-
-        # =========================
-        # VIDEO
-        # =========================
-        if data.get("play"):
+        else:
 
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("📹 Download MP4", callback_data="dl_mp4"),
-                    InlineKeyboardButton("🎵 Download MP3", callback_data="dl_mp3")
+                    InlineKeyboardButton("Download MP4", callback_data="check_mp4"),
+                    InlineKeyboardButton("Download MP3", callback_data="check_mp3")
                 ]
             ])
 
-            await msg.edit_text(
-                "🎥 Video terdeteksi\nPilih format:",
-                reply_markup=keyboard
-            )
 
-            return
+        await msg.edit_text("Pilih format:", reply_markup=keyboard)
 
-        await msg.edit_text("❌ Media tidak ditemukan")
 
     except Exception as e:
 
-        progress_task.cancel()
-
-        await msg.edit_text(f"❌ Error: {e}")
+        await msg.edit_text(str(e))
 
 
 # =========================
@@ -213,53 +221,83 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    data = context.user_data.get("tiktok_data")
-
-    if not data:
-        await query.edit_message_text("❌ Data expired, kirim ulang link")
-        return
-
     choice = query.data
 
-    try:
+    user = update.effective_user
 
-        # MP4
-        if choice == "dl_mp4":
+    user_data = get_user(user)
 
-            await query.message.reply_text("⬇️ Mengirim video...")
 
-            await query.message.reply_video(
-                video=data["play"],
-                caption="✅ Video berhasil didownload\n\n☕ Support admin:\nhttps://clicky.id/kang-banjar/support/coffee"
-            )
+    # =========================
+    # CHECK ADS REQUIREMENT
+    # =========================
+    if choice.startswith("check_"):
 
-        # MP3
-        elif choice == "dl_mp3":
+        format_choice = choice.replace("check_", "")
 
-            await query.message.reply_text("⬇️ Mengirim audio...")
+        context.user_data["format"] = format_choice
 
-            await query.message.reply_audio(
-                audio=data["music"],
-                caption="✅ Audio berhasil didownload\n\n☕ Support admin:\nhttps://clicky.id/kang-banjar/support/coffee"
-            )
+        # premium skip ads
+        if user_data["premium"]:
 
-        # IMAGES
-        elif choice == "dl_images":
+            await send_file(query, context)
+            return
 
-            await query.message.reply_text("⬇️ Mengirim gambar...")
+        # first download free
+        if user_data["download_count"] == 0:
 
-            media = []
+            await send_file(query, context)
+            return
 
-            for img in data["images"]:
-                media.append(InputMediaPhoto(img))
+        # show ads
+        ads = get_ads()
 
-            await query.message.reply_media_group(media)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Buka Iklan", url=ads)],
+            [InlineKeyboardButton("Lanjutkan Download", callback_data="continue")]
+        ])
 
-        await query.message.delete()
+        await query.message.reply_text(
+            "Silakan buka iklan dulu:",
+            reply_markup=keyboard
+        )
 
-    except Exception as e:
+        return
 
-        await query.message.reply_text(f"❌ Error: {e}")
+
+    if choice == "continue":
+
+        await send_file(query, context)
+
+
+# =========================
+# SEND FILE
+# =========================
+async def send_file(query, context):
+
+    data = context.user_data.get("data")
+    format_choice = context.user_data.get("format")
+
+    user_id = query.from_user.id
+
+    increment_download(user_id)
+
+
+    if format_choice == "mp4":
+
+        await query.message.reply_video(data["play"])
+
+
+    elif format_choice == "mp3":
+
+        await query.message.reply_audio(data["music"])
+
+
+    elif format_choice == "images":
+
+        media = [InputMediaPhoto(x) for x in data["images"]]
+
+        await query.message.reply_media_group(media)
 
 
 # =========================
@@ -271,23 +309,14 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        )
-    )
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
 
-    app.add_handler(
-        CallbackQueryHandler(handle_button)
-    )
+    app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("🤖 Bot running...")
+    print("Bot running with premium + ads system")
+
     app.run_polling()
 
 
-# =========================
-# RUN
-# =========================
 if __name__ == "__main__":
     main()
