@@ -12,7 +12,9 @@ from telegram import (
     Update,
     InputMediaPhoto,
     InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton
 )
 
 from telegram.ext import (
@@ -38,20 +40,30 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 API_URL = "https://tikwm.com/api/"
 TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
+# =========================
+# ADS TIMER
+# =========================
+ads_timer = {}
+ADS_DURATION = 10
+
 
 # =========================
-# MENU
+# KEYBOARD MENU (BOTTOM)
 # =========================
-def main_menu():
+def main_keyboard():
 
-    keyboard = InlineKeyboardMarkup([
+    keyboard = [
         [
-            InlineKeyboardButton("👤 Account", callback_data="menu_account"),
-            InlineKeyboardButton("💎 Premium", callback_data="menu_premium")
+            KeyboardButton("👤 Account"),
+            KeyboardButton("⭐ Premium")
         ]
-    ])
+    ]
 
-    return keyboard
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        persistent=True
+    )
 
 
 # =========================
@@ -89,7 +101,7 @@ def increment_download(user_id):
 
 
 # =========================
-# ADS
+# ADS LINK
 # =========================
 def get_ads():
 
@@ -126,7 +138,7 @@ def is_spam(user_id):
 
 
 # =========================
-# LOADING
+# LOADING UI
 # =========================
 async def show_progress(msg):
 
@@ -138,7 +150,6 @@ async def show_progress(msg):
     ]
 
     for step in steps:
-
         try:
             await msg.edit_text(step)
             await asyncio.sleep(0.5)
@@ -154,21 +165,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_user(update.effective_user)
 
     await update.message.reply_text(
-        "📥 Kirim link TikTok\n\n"
-        "Support:\n"
-        "• Video (MP4)\n"
-        "• Audio (MP3)\n"
-        "• Slide (Images)",
-        reply_markup=main_menu()
+        "📥 Kirim link TikTok untuk mulai download",
+        reply_markup=main_keyboard()
     )
 
 
 # =========================
-# ACCOUNT MENU
+# ACCOUNT
 # =========================
-async def account_menu(query):
+async def show_account(update: Update):
 
-    user = get_user(query.from_user)
+    user = get_user(update.effective_user)
 
     status = "Premium" if user["premium"] else "Free"
 
@@ -178,21 +185,19 @@ async def account_menu(query):
     since_text = str(since)[:10] if since else "-"
     expired_text = str(expired)[:10] if expired else "-"
 
-    text = (
+    await update.message.reply_text(
         f"👤 Account\n\n"
-        f"ID: {query.from_user.id}\n"
+        f"ID: {update.effective_user.id}\n"
         f"Status: {status}\n"
         f"Aktif sejak: {since_text}\n"
         f"Berakhir: {expired_text}"
     )
 
-    await query.message.reply_text(text)
-
 
 # =========================
-# PREMIUM MENU
+# PREMIUM
 # =========================
-async def premium_menu(query):
+async def show_premium(update: Update):
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -203,8 +208,8 @@ async def premium_menu(query):
         ]
     ])
 
-    await query.message.reply_text(
-        "💎 Premium Plan\n\n"
+    await update.message.reply_text(
+        "⭐ Premium Plan\n\n"
         "• Tanpa iklan\n"
         "• Download tanpa gangguan\n"
         "• Prioritas kecepatan\n\n"
@@ -214,7 +219,7 @@ async def premium_menu(query):
 
 
 # =========================
-# TRIPAY CREATE TRANSACTION
+# TRIPAY
 # =========================
 def create_tripay(user_id):
 
@@ -262,6 +267,17 @@ def extract_url(text):
 # =========================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    text = update.message.text
+
+    if text == "👤 Account":
+        await show_account(update)
+        return
+
+    if text == "⭐ Premium":
+        await show_premium(update)
+        return
+
+
     user = update.effective_user
 
     cooldown_time = is_spam(user.id)
@@ -275,7 +291,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    url = extract_url(update.message.text)
+    url = extract_url(text)
 
     if not url:
         return
@@ -295,12 +311,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if json_data["code"] != 0:
 
             await msg.edit_text("❌ Tidak dapat mengambil media")
-
             return
 
 
         data = json_data["data"]
-
         context.user_data["data"] = data
 
         progress.cancel()
@@ -332,7 +346,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
 
         progress.cancel()
-
         await msg.edit_text("❌ Error")
 
 
@@ -345,23 +358,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     choice = query.data
-
     user = get_user(query.from_user)
-
-
-    if choice == "menu_account":
-        await account_menu(query)
-        return
-
-
-    if choice == "menu_premium":
-        await premium_menu(query)
-        return
+    user_id = query.from_user.id
 
 
     if choice == "buy_premium":
 
-        trx = create_tripay(query.from_user.id)
+        trx = create_tripay(user_id)
 
         pay_url = trx["data"]["checkout_url"]
 
@@ -373,41 +376,77 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Klik tombol untuk bayar:",
             reply_markup=keyboard
         )
-
         return
 
 
     if choice.startswith("check_"):
 
         format_choice = choice.replace("check_", "")
-
         context.user_data["format"] = format_choice
 
+        # skip ads jika premium atau first download
         if user["premium"] or user["download_count"] == 0:
 
-            await send_file(query, context)
-
+            await start_download_process(query, context)
             return
 
 
         ads = get_ads()
 
+        ads_timer[user_id] = time.time()
+
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Buka Link", url=ads)],
-            [InlineKeyboardButton("⬇️ Lanjutkan", callback_data="continue")]
+            [
+                InlineKeyboardButton("⬇️ Download", url=ads)
+            ]
         ])
 
         await query.message.reply_text(
-            "Silakan lanjutkan:",
+            "⬇️ Menyiapkan download...\n"
+            "Silakan tunggu 10 detik di halaman download",
             reply_markup=keyboard
         )
+
+        asyncio.create_task(wait_and_send(query, context, user_id))
 
         return
 
 
-    if choice == "continue":
+# =========================
+# TIMER
+# =========================
+async def wait_and_send(query, context, user_id):
 
-        await send_file(query, context)
+    await asyncio.sleep(ADS_DURATION)
+
+    if user_id not in ads_timer:
+        return
+
+    await start_download_process(query, context)
+
+    del ads_timer[user_id]
+
+
+# =========================
+# DOWNLOAD PROCESS
+# =========================
+async def start_download_process(query, context):
+
+    msg = await query.message.reply_text("⏳ Memulai download...")
+
+    steps = [
+        "📡 Menghubungi server...",
+        "📦 Mengambil file...",
+        "⬇️ Mengirim file..."
+    ]
+
+    for step in steps:
+        await asyncio.sleep(0.8)
+        await msg.edit_text(step)
+
+    await send_file(query, context)
+
+    await msg.delete()
 
 
 # =========================
@@ -416,26 +455,18 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_file(query, context):
 
     data = context.user_data.get("data")
-
     format_choice = context.user_data.get("format")
 
     increment_download(query.from_user.id)
 
-
     if format_choice == "mp4":
-
         await query.message.reply_video(data["play"])
 
-
     elif format_choice == "mp3":
-
         await query.message.reply_audio(data["music"])
 
-
     elif format_choice == "images":
-
         media = [InputMediaPhoto(x) for x in data["images"]]
-
         await query.message.reply_media_group(media)
 
 
@@ -447,12 +478,10 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
-
     app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("Bot running with account & premium menu")
+    print("Bot running with auto ads timer")
 
     app.run_polling()
 
