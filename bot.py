@@ -10,7 +10,6 @@ from supabase import create_client, Client
 
 from telegram import (
     Update,
-    InputMediaPhoto,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
@@ -37,21 +36,32 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 API_URL = "https://tikwm.com/api/"
 TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
+
 # =========================
 # KEYBOARD MENU
 # =========================
 
-def main_keyboard():
+def main_keyboard(user_id):
+
+    keyboard = [
+        [KeyboardButton("👤 Account"), KeyboardButton("⭐ Premium")]
+    ]
+
+    if user_id == ADMIN_ID:
+        keyboard.append([KeyboardButton("🛠 Admin")])
+
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("👤 Account"), KeyboardButton("⭐ Premium")]],
+        keyboard,
         resize_keyboard=True
     )
+
 
 # =========================
 # USER SYSTEM
@@ -65,7 +75,6 @@ def get_user(user):
 
         user_data = result.data[0]
 
-        # cek expire premium
         if user_data.get("premium_expired"):
 
             expire = datetime.fromisoformat(user_data["premium_expired"])
@@ -80,7 +89,6 @@ def get_user(user):
 
         return user_data
 
-    # create user baru
     supabase.table("users").insert({
         "id": user.id,
         "username": user.username or "",
@@ -106,18 +114,20 @@ def increment_download(user_id):
             "download_count": count
         }).eq("id", user_id).execute()
 
+
 # =========================
-# ADS
+# ADS SYSTEM
 # =========================
 
 def get_ads():
 
-    result = supabase.table("ads_links").select("url").eq("active", True).execute()
+    result = supabase.table("ads_links").select("*").eq("active", True).execute()
 
     if result.data:
         return random.choice(result.data)["url"]
 
     return "https://example.com"
+
 
 # =========================
 # START
@@ -129,14 +139,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "📥 Kirim link TikTok untuk download",
-        reply_markup=main_keyboard()
+        reply_markup=main_keyboard(update.effective_user.id)
     )
+
 
 # =========================
 # ACCOUNT
 # =========================
 
-async def show_account(update: Update):
+async def show_account(update):
 
     user = get_user(update.effective_user)
 
@@ -148,11 +159,12 @@ async def show_account(update: Update):
         f"Status: {status}"
     )
 
+
 # =========================
 # PREMIUM MENU
 # =========================
 
-async def show_premium(update: Update):
+async def show_premium(update):
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⭐ Beli Premium (50 Stars)", callback_data="buy_premium")]
@@ -162,13 +174,39 @@ async def show_premium(update: Update):
         "⭐ Premium Plan\n\n"
         "• Tanpa iklan\n"
         "• Download instan\n"
-        "• Kecepatan prioritas\n\n"
+        "• Prioritas kecepatan\n\n"
         "Harga: 50 Stars / bulan",
         reply_markup=keyboard
     )
 
+
 # =========================
-# SEND INVOICE (Telegram Stars)
+# ADMIN PANEL
+# =========================
+
+async def show_admin(update):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    keyboard = ReplyKeyboardMarkup(
+        [
+            ["➕ Tambah Ads"],
+            ["📋 List Ads"],
+            ["❌ Hapus Ads"],
+            ["⬅️ Kembali"]
+        ],
+        resize_keyboard=True
+    )
+
+    await update.message.reply_text(
+        "🛠 Admin Panel",
+        reply_markup=keyboard
+    )
+
+
+# =========================
+# TELEGRAM STARS PAYMENT
 # =========================
 
 async def send_invoice(query, context):
@@ -180,24 +218,23 @@ async def send_invoice(query, context):
         title="Premium Bot",
         description="Premium aktif 30 hari",
         payload="premium",
-        provider_token="",  # kosong wajib untuk Stars
-        currency="XTR",     # XTR = Telegram Stars
+        provider_token="",
+        currency="XTR",
         prices=prices
     )
 
-# =========================
-# PRE CHECKOUT
-# =========================
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.pre_checkout_query.answer(ok=True)
 
-# =========================
-# PAYMENT SUCCESS
-# =========================
 
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    payload = update.message.successful_payment.invoice_payload
+
+    if payload != "premium":
+        return
 
     user_id = update.effective_user.id
 
@@ -211,18 +248,9 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }).eq("id", user_id).execute()
 
     await update.message.reply_text(
-        "✅ Premium aktif selama 30 hari!\n\nTerima kasih telah mendukung bot ini ⭐"
+        "✅ Premium aktif selama 30 hari!\n\nTerima kasih ⭐"
     )
 
-# =========================
-# EXTRACT URL
-# =========================
-
-def extract_url(text):
-
-    match = re.search(TIKTOK_REGEX, text)
-
-    return match.group(0) if match else None
 
 # =========================
 # HANDLE MESSAGE
@@ -231,6 +259,7 @@ def extract_url(text):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
+    user_id = update.effective_user.id
 
     if text == "👤 Account":
         await show_account(update)
@@ -240,38 +269,89 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_premium(update)
         return
 
-    url = extract_url(text)
+    if text == "🛠 Admin":
+        await show_admin(update)
+        return
+
+    if text == "⬅️ Kembali":
+        await update.message.reply_text(
+            "Menu utama",
+            reply_markup=main_keyboard(user_id)
+        )
+        return
+
+    # ADMIN ADD ADS
+    if context.user_data.get("admin_mode") == "add_ads":
+
+        supabase.table("ads_links").insert({
+            "url": text,
+            "active": True
+        }).execute()
+
+        context.user_data["admin_mode"] = None
+
+        await update.message.reply_text("✅ Ads ditambahkan")
+        return
+
+    # ADMIN DELETE ADS
+    if context.user_data.get("admin_mode") == "delete_ads":
+
+        supabase.table("ads_links").delete().eq("id", int(text)).execute()
+
+        context.user_data["admin_mode"] = None
+
+        await update.message.reply_text("✅ Ads dihapus")
+        return
+
+    # ADMIN MENU COMMANDS
+    if text == "➕ Tambah Ads":
+        context.user_data["admin_mode"] = "add_ads"
+        await update.message.reply_text("Kirim link ads")
+        return
+
+    if text == "❌ Hapus Ads":
+        context.user_data["admin_mode"] = "delete_ads"
+        await update.message.reply_text("Kirim ID ads")
+        return
+
+    if text == "📋 List Ads":
+
+        result = supabase.table("ads_links").select("*").execute()
+
+        if not result.data:
+            await update.message.reply_text("Tidak ada ads")
+            return
+
+        msg = "📋 List Ads\n\n"
+
+        for ad in result.data:
+            msg += f"{ad['id']} - {ad['url']}\n"
+
+        await update.message.reply_text(msg)
+        return
+
+    # HANDLE TIKTOK LINK
+    url = re.search(TIKTOK_REGEX, text)
 
     if not url:
         return
 
     msg = await update.message.reply_text("⏳ Memproses...")
 
-    try:
+    res = requests.get(API_URL, params={"url": url.group(0)})
+    data = res.json()["data"]
 
-        res = requests.get(API_URL, params={"url": url})
-        json_data = res.json()
+    context.user_data["data"] = data
 
-        if "data" not in json_data:
-            await msg.edit_text("❌ Gagal mengambil media")
-            return
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📹 MP4", callback_data="dl_mp4"),
+            InlineKeyboardButton("🎵 MP3", callback_data="dl_mp3")
+        ]
+    ])
 
-        data = json_data["data"]
+    await msg.edit_text("Pilih format:", reply_markup=keyboard)
 
-        context.user_data["data"] = data
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📹 MP4", callback_data="dl_mp4"),
-                InlineKeyboardButton("🎵 MP3", callback_data="dl_mp3")
-            ]
-        ])
-
-        await msg.edit_text("Pilih format:", reply_markup=keyboard)
-
-    except Exception as e:
-
-        await msg.edit_text("❌ Error mengambil media")
 
 # =========================
 # HANDLE BUTTON
@@ -282,12 +362,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # beli premium
     if query.data == "buy_premium":
         await send_invoice(query, context)
         return
 
-    # lanjutkan download
     if query.data == "continue":
         await send_file(query, context)
         return
@@ -296,7 +374,6 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["format"] = query.data.replace("dl_", "")
 
-    # premium atau download pertama skip ads
     if user["premium"] or user["download_count"] == 0:
         await send_file(query, context)
         return
@@ -313,6 +390,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard
     )
 
+
 # =========================
 # SEND FILE
 # =========================
@@ -322,20 +400,16 @@ async def send_file(query, context):
     data = context.user_data.get("data")
 
     if not data:
-        await query.message.reply_text("Session expired, kirim link lagi")
+        await query.message.reply_text("Session expired")
         return
-
-    format_choice = context.user_data.get("format")
 
     increment_download(query.from_user.id)
 
-    if format_choice == "mp4":
-
+    if context.user_data["format"] == "mp4":
         await query.message.reply_video(data["play"])
-
-    elif format_choice == "mp3":
-
+    else:
         await query.message.reply_audio(data["music"])
+
 
 # =========================
 # MAIN
@@ -355,11 +429,10 @@ def main():
 
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    print("Bot running with Telegram Stars + Ads system")
+    print("Bot running FULL with Admin + Ads + Stars")
 
     app.run_polling()
 
-# =========================
 
 if __name__ == "__main__":
     main()
