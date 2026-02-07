@@ -40,9 +40,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 API_URL = "https://tikwm.com/api/"
 TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
+# =========================
+# ADS SESSION
+# =========================
+ads_session = {}
 
 # =========================
-# KEYBOARD MENU (BOTTOM)
+# KEYBOARD MENU
 # =========================
 def main_keyboard():
 
@@ -56,7 +60,7 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True,
-        persistent=True
+        is_persistent=True
     )
 
 
@@ -95,7 +99,7 @@ def increment_download(user_id):
 
 
 # =========================
-# ADS
+# GET ADS
 # =========================
 def get_ads():
 
@@ -165,7 +169,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ACCOUNT INFO
+# ACCOUNT
 # =========================
 async def show_account(update: Update):
 
@@ -173,23 +177,15 @@ async def show_account(update: Update):
 
     status = "Premium" if user["premium"] else "Free"
 
-    since = user.get("premium_since")
-    expired = user.get("premium_expired")
-
-    since_text = str(since)[:10] if since else "-"
-    expired_text = str(expired)[:10] if expired else "-"
-
     await update.message.reply_text(
         f"👤 Account\n\n"
         f"ID: {update.effective_user.id}\n"
-        f"Status: {status}\n"
-        f"Aktif sejak: {since_text}\n"
-        f"Berakhir: {expired_text}"
+        f"Status: {status}"
     )
 
 
 # =========================
-# PREMIUM INFO
+# PREMIUM
 # =========================
 async def show_premium(update: Update):
 
@@ -204,16 +200,13 @@ async def show_premium(update: Update):
 
     await update.message.reply_text(
         "⭐ Premium Plan\n\n"
-        "• Tanpa iklan\n"
-        "• Download tanpa gangguan\n"
-        "• Prioritas kecepatan\n\n"
         "Harga: Rp15.000 / bulan",
         reply_markup=keyboard
     )
 
 
 # =========================
-# CREATE TRIPAY
+# TRIPAY
 # =========================
 def create_tripay(user_id):
 
@@ -224,13 +217,6 @@ def create_tripay(user_id):
         "merchant_ref": f"PREMIUM-{user_id}-{int(time.time())}",
         "amount": 15000,
         "customer_name": str(user_id),
-        "order_items": [
-            {
-                "name": "Premium 1 Bulan",
-                "price": 15000,
-                "quantity": 1
-            }
-        ]
     }
 
     headers = {
@@ -263,12 +249,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    # MENU ACCOUNT
     if text == "👤 Account":
         await show_account(update)
         return
 
-    # MENU PREMIUM
     if text == "⭐ Premium":
         await show_premium(update)
         return
@@ -301,50 +285,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
 
         res = requests.get(API_URL, params={"url": url})
-
         json_data = res.json()
 
         if json_data["code"] != 0:
 
-            await msg.edit_text("❌ Tidak dapat mengambil media")
-
+            await msg.edit_text("❌ Gagal mengambil media")
             return
 
 
         data = json_data["data"]
-
         context.user_data["data"] = data
 
         progress.cancel()
 
 
-        if data.get("images"):
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⬇️ Download MP4", callback_data="check_mp4"),
+                InlineKeyboardButton("🎵 Download MP3", callback_data="check_mp3")
+            ]
+        ])
 
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🖼️ Download Gambar", callback_data="check_images"),
-                    InlineKeyboardButton("🎵 Download MP3", callback_data="check_mp3")
-                ]
-            ])
-
-            await msg.edit_text("📸 Slide terdeteksi", reply_markup=keyboard)
-
-        else:
-
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("📹 Download MP4", callback_data="check_mp4"),
-                    InlineKeyboardButton("🎵 Download MP3", callback_data="check_mp3")
-                ]
-            ])
-
-            await msg.edit_text("🎥 Video terdeteksi", reply_markup=keyboard)
+        await msg.edit_text("Pilih format download:", reply_markup=keyboard)
 
 
     except:
 
         progress.cancel()
-
         await msg.edit_text("❌ Error")
 
 
@@ -357,33 +324,28 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     choice = query.data
-
     user = get_user(query.from_user)
+    user_id = query.from_user.id
 
 
     if choice == "buy_premium":
 
-        trx = create_tripay(query.from_user.id)
-
+        trx = create_tripay(user_id)
         pay_url = trx["data"]["checkout_url"]
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💳 Bayar Sekarang", url=pay_url)]
+            [InlineKeyboardButton("Bayar", url=pay_url)]
         ])
 
-        await query.message.reply_text(
-            "Klik tombol untuk bayar:",
-            reply_markup=keyboard
-        )
-
+        await query.message.reply_text("Bayar premium:", reply_markup=keyboard)
         return
 
 
     if choice.startswith("check_"):
 
         format_choice = choice.replace("check_", "")
-
         context.user_data["format"] = format_choice
+
 
         if user["premium"] or user["download_count"] == 0:
 
@@ -391,24 +353,36 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
+        ads_session[user_id] = True
+
         ads = get_ads()
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Buka Link", url=ads)],
-            [InlineKeyboardButton("⬇️ Lanjutkan", callback_data="continue")]
+            [InlineKeyboardButton("⬇️ Download", url=ads)],
+            [InlineKeyboardButton("✅ Lanjutkan Download", callback_data="continue_download")]
         ])
 
         await query.message.reply_text(
-            "Silakan lanjutkan:",
+            "Klik Download lalu kembali dan tekan Lanjutkan Download",
             reply_markup=keyboard
         )
-
         return
 
 
-    if choice == "continue":
+    if choice == "continue_download":
+
+        if user_id not in ads_session:
+
+            await query.message.reply_text("Session expired")
+            return
+
+        del ads_session[user_id]
+
+        msg = await query.message.reply_text("Mengirim file...")
 
         await send_file(query, context)
+
+        await msg.delete()
 
 
 # =========================
@@ -427,7 +401,7 @@ async def send_file(query, context):
     elif format_choice == "mp3":
         await query.message.reply_audio(data["music"])
 
-    elif format_choice == "images":
+    elif data.get("images"):
         media = [InputMediaPhoto(x) for x in data["images"]]
         await query.message.reply_media_group(media)
 
@@ -443,7 +417,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("Bot running with bottom menu")
+    print("Bot running...")
 
     app.run_polling()
 
