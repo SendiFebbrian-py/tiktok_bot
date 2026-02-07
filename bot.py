@@ -40,15 +40,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 API_URL = "https://tikwm.com/api/"
 TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
-# =========================
-# ADS TIMER SYSTEM
-# =========================
-ads_timer = {}
-ADS_DURATION = 10
-
 
 # =========================
-# KEYBOARD MENU
+# KEYBOARD MENU (BOTTOM)
 # =========================
 def main_keyboard():
 
@@ -62,7 +56,7 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True,
-        is_persistent=True   # FIXED
+        persistent=True
     )
 
 
@@ -101,7 +95,7 @@ def increment_download(user_id):
 
 
 # =========================
-# ADS LINK
+# ADS
 # =========================
 def get_ads():
 
@@ -138,7 +132,7 @@ def is_spam(user_id):
 
 
 # =========================
-# LOADING UI
+# LOADING
 # =========================
 async def show_progress(msg):
 
@@ -171,7 +165,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ACCOUNT MENU
+# ACCOUNT INFO
 # =========================
 async def show_account(update: Update):
 
@@ -195,7 +189,7 @@ async def show_account(update: Update):
 
 
 # =========================
-# PREMIUM MENU
+# PREMIUM INFO
 # =========================
 async def show_premium(update: Update):
 
@@ -219,7 +213,7 @@ async def show_premium(update: Update):
 
 
 # =========================
-# TRIPAY CREATE
+# CREATE TRIPAY
 # =========================
 def create_tripay(user_id):
 
@@ -269,10 +263,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
+    # MENU ACCOUNT
     if text == "👤 Account":
         await show_account(update)
         return
 
+    # MENU PREMIUM
     if text == "⭐ Premium":
         await show_premium(update)
         return
@@ -287,6 +283,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"⏳ Tunggu {int(cooldown_time)} detik"
         )
+
         return
 
 
@@ -310,10 +307,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if json_data["code"] != 0:
 
             await msg.edit_text("❌ Tidak dapat mengambil media")
+
             return
 
 
         data = json_data["data"]
+
         context.user_data["data"] = data
 
         progress.cancel()
@@ -345,6 +344,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
 
         progress.cancel()
+
         await msg.edit_text("❌ Error")
 
 
@@ -357,13 +357,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     choice = query.data
+
     user = get_user(query.from_user)
-    user_id = query.from_user.id
 
 
     if choice == "buy_premium":
 
-        trx = create_tripay(user_id)
+        trx = create_tripay(query.from_user.id)
 
         pay_url = trx["data"]["checkout_url"]
 
@@ -375,75 +375,40 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Klik tombol untuk bayar:",
             reply_markup=keyboard
         )
+
         return
 
 
     if choice.startswith("check_"):
 
         format_choice = choice.replace("check_", "")
+
         context.user_data["format"] = format_choice
 
-        # premium atau first download skip ads
         if user["premium"] or user["download_count"] == 0:
 
-            await start_download_process(query, context)
+            await send_file(query, context)
             return
 
 
         ads = get_ads()
 
-        ads_timer[user_id] = time.time()
-
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⬇️ Download", url=ads)
-            ]
+            [InlineKeyboardButton("🔗 Buka Link", url=ads)],
+            [InlineKeyboardButton("⬇️ Lanjutkan", callback_data="continue")]
         ])
 
         await query.message.reply_text(
-            "⬇️ Menyiapkan download...\n"
-            "Silakan tunggu 10 detik di halaman download",
+            "Silakan lanjutkan:",
             reply_markup=keyboard
         )
 
-        asyncio.create_task(wait_and_send(query, context, user_id))
-
-
-# =========================
-# TIMER
-# =========================
-async def wait_and_send(query, context, user_id):
-
-    await asyncio.sleep(ADS_DURATION)
-
-    if user_id not in ads_timer:
         return
 
-    await start_download_process(query, context)
 
-    del ads_timer[user_id]
+    if choice == "continue":
 
-
-# =========================
-# DOWNLOAD PROCESS
-# =========================
-async def start_download_process(query, context):
-
-    msg = await query.message.reply_text("⏳ Memulai download...")
-
-    steps = [
-        "📡 Menghubungi server...",
-        "📦 Mengambil file...",
-        "⬇️ Mengirim file..."
-    ]
-
-    for step in steps:
-        await asyncio.sleep(0.8)
-        await msg.edit_text(step)
-
-    await send_file(query, context)
-
-    await msg.delete()
+        await send_file(query, context)
 
 
 # =========================
@@ -478,9 +443,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("Bot running successfully")
+    print("Bot running with bottom menu")
 
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
 
 
 if __name__ == "__main__":
