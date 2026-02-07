@@ -40,7 +40,7 @@ TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
 
 # =========================
-# USER FUNCTIONS
+# USER SYSTEM
 # =========================
 def get_user(user):
 
@@ -50,19 +50,16 @@ def get_user(user):
         .execute()
 
     if result.data:
-
         return result.data[0]
 
-    # create new user
     supabase.table("users").insert({
         "id": user.id,
         "username": user.username or "",
-        "download_count": 0,
-        "premium": False
+        "premium": False,
+        "download_count": 0
     }).execute()
 
     return {
-        "id": user.id,
         "premium": False,
         "download_count": 0
     }
@@ -77,7 +74,7 @@ def increment_download(user_id):
 
 
 # =========================
-# ADS SYSTEM
+# GET RANDOM ADS
 # =========================
 def get_ads():
 
@@ -87,7 +84,6 @@ def get_ads():
         .execute()
 
     if result.data:
-
         return random.choice(result.data)["url"]
 
     return "https://example.com"
@@ -107,12 +103,32 @@ def is_spam(user_id):
         diff = now - cooldown[user_id]
 
         if diff < 5:
-
             return 5 - diff
 
     cooldown[user_id] = now
 
     return 0
+
+
+# =========================
+# LOADING
+# =========================
+async def show_progress(msg):
+
+    steps = [
+        "🔍 Mendapatkan info...",
+        "📡 Menghubungi server...",
+        "⚙️ Memproses media...",
+        "📦 Menyiapkan opsi..."
+    ]
+
+    for step in steps:
+
+        try:
+            await msg.edit_text(step)
+            await asyncio.sleep(0.5)
+        except:
+            break
 
 
 # =========================
@@ -124,8 +140,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "📥 Kirim link TikTok\n\n"
-        "Download pertama gratis.\n"
-        "Seterusnya harus lihat iklan atau premium."
+        "Support:\n"
+        "• Video (MP4)\n"
+        "• Audio (MP3)\n"
+        "• Slide (Images)"
     )
 
 
@@ -151,7 +169,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cooldown_time > 0:
 
         await update.message.reply_text(
-            f"Tunggu {int(cooldown_time)} detik"
+            f"⏳ Tunggu {int(cooldown_time)} detik"
         )
 
         return
@@ -163,7 +181,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    msg = await update.message.reply_text("Processing...")
+    msg = await update.message.reply_text("⏳ Memproses...")
+
+    progress = asyncio.create_task(show_progress(msg))
 
 
     try:
@@ -174,7 +194,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if json_data["code"] != 0:
 
-            await msg.edit_text("Error")
+            await msg.edit_text("❌ Tidak dapat mengambil media")
 
             return
 
@@ -184,32 +204,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["data"] = data
         context.user_data["url"] = url
 
+        progress.cancel()
+
 
         if data.get("images"):
 
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("Download Images", callback_data="check_images"),
-                    InlineKeyboardButton("Download MP3", callback_data="check_mp3")
+                    InlineKeyboardButton("🖼️ Download Gambar", callback_data="check_images"),
+                    InlineKeyboardButton("🎵 Download MP3", callback_data="check_mp3")
                 ]
             ])
+
+            await msg.edit_text(
+                "📸 Slide terdeteksi\nPilih format:",
+                reply_markup=keyboard
+            )
 
         else:
 
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("Download MP4", callback_data="check_mp4"),
-                    InlineKeyboardButton("Download MP3", callback_data="check_mp3")
+                    InlineKeyboardButton("📹 Download MP4", callback_data="check_mp4"),
+                    InlineKeyboardButton("🎵 Download MP3", callback_data="check_mp3")
                 ]
             ])
 
-
-        await msg.edit_text("Pilih format:", reply_markup=keyboard)
+            await msg.edit_text(
+                "🎥 Video terdeteksi\nPilih format:",
+                reply_markup=keyboard
+            )
 
 
     except Exception as e:
 
-        await msg.edit_text(str(e))
+        progress.cancel()
+
+        await msg.edit_text("❌ Terjadi kesalahan")
 
 
 # =========================
@@ -218,24 +249,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
-
     await query.answer()
-
-    choice = query.data
 
     user = update.effective_user
 
     user_data = get_user(user)
 
+    choice = query.data
 
-    # =========================
-    # CHECK ADS REQUIREMENT
-    # =========================
+
     if choice.startswith("check_"):
 
         format_choice = choice.replace("check_", "")
 
         context.user_data["format"] = format_choice
+
 
         # premium skip ads
         if user_data["premium"]:
@@ -243,22 +271,23 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_file(query, context)
             return
 
-        # first download free
+
+        # first download skip ads
         if user_data["download_count"] == 0:
 
             await send_file(query, context)
             return
 
-        # show ads
+
         ads = get_ads()
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Buka Iklan", url=ads)],
-            [InlineKeyboardButton("Lanjutkan Download", callback_data="continue")]
+            [InlineKeyboardButton("🔗 Buka Link", url=ads)],
+            [InlineKeyboardButton("⬇️ Lanjutkan Download", callback_data="continue")]
         ])
 
         await query.message.reply_text(
-            "Silakan buka iklan dulu:",
+            "Silakan lanjutkan:",
             reply_markup=keyboard
         )
 
@@ -278,9 +307,7 @@ async def send_file(query, context):
     data = context.user_data.get("data")
     format_choice = context.user_data.get("format")
 
-    user_id = query.from_user.id
-
-    increment_download(user_id)
+    increment_download(query.from_user.id)
 
 
     if format_choice == "mp4":
@@ -313,7 +340,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("Bot running with premium + ads system")
+    print("Bot running clean UI version")
 
     app.run_polling()
 
