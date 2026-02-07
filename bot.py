@@ -40,6 +40,21 @@ TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 
 
 # =========================
+# MENU
+# =========================
+def main_menu():
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👤 Account", callback_data="menu_account"),
+            InlineKeyboardButton("💎 Premium", callback_data="menu_premium")
+        ]
+    ])
+
+    return keyboard
+
+
+# =========================
 # USER SYSTEM
 # =========================
 def get_user(user):
@@ -74,7 +89,7 @@ def increment_download(user_id):
 
 
 # =========================
-# GET RANDOM ADS
+# ADS
 # =========================
 def get_ads():
 
@@ -143,8 +158,93 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Support:\n"
         "• Video (MP4)\n"
         "• Audio (MP3)\n"
-        "• Slide (Images)"
+        "• Slide (Images)",
+        reply_markup=main_menu()
     )
+
+
+# =========================
+# ACCOUNT MENU
+# =========================
+async def account_menu(query):
+
+    user = get_user(query.from_user)
+
+    status = "Premium" if user["premium"] else "Free"
+
+    since = user.get("premium_since")
+    expired = user.get("premium_expired")
+
+    since_text = str(since)[:10] if since else "-"
+    expired_text = str(expired)[:10] if expired else "-"
+
+    text = (
+        f"👤 Account\n\n"
+        f"ID: {query.from_user.id}\n"
+        f"Status: {status}\n"
+        f"Aktif sejak: {since_text}\n"
+        f"Berakhir: {expired_text}"
+    )
+
+    await query.message.reply_text(text)
+
+
+# =========================
+# PREMIUM MENU
+# =========================
+async def premium_menu(query):
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "💳 Beli Premium Rp15.000 / bulan",
+                callback_data="buy_premium"
+            )
+        ]
+    ])
+
+    await query.message.reply_text(
+        "💎 Premium Plan\n\n"
+        "• Tanpa iklan\n"
+        "• Download tanpa gangguan\n"
+        "• Prioritas kecepatan\n\n"
+        "Harga: Rp15.000 / bulan",
+        reply_markup=keyboard
+    )
+
+
+# =========================
+# TRIPAY CREATE TRANSACTION
+# =========================
+def create_tripay(user_id):
+
+    api_key = os.getenv("TRIPAY_API_KEY")
+
+    data = {
+        "method": "QRIS",
+        "merchant_ref": f"PREMIUM-{user_id}-{int(time.time())}",
+        "amount": 15000,
+        "customer_name": str(user_id),
+        "order_items": [
+            {
+                "name": "Premium 1 Bulan",
+                "price": 15000,
+                "quantity": 1
+            }
+        ]
+    }
+
+    headers = {
+        "Authorization": "Bearer " + api_key
+    }
+
+    r = requests.post(
+        "https://tripay.co.id/api/transaction/create",
+        json=data,
+        headers=headers
+    )
+
+    return r.json()
 
 
 # =========================
@@ -202,7 +302,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = json_data["data"]
 
         context.user_data["data"] = data
-        context.user_data["url"] = url
 
         progress.cancel()
 
@@ -216,10 +315,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ])
 
-            await msg.edit_text(
-                "📸 Slide terdeteksi\nPilih format:",
-                reply_markup=keyboard
-            )
+            await msg.edit_text("📸 Slide terdeteksi", reply_markup=keyboard)
 
         else:
 
@@ -230,17 +326,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ])
 
-            await msg.edit_text(
-                "🎥 Video terdeteksi\nPilih format:",
-                reply_markup=keyboard
-            )
+            await msg.edit_text("🎥 Video terdeteksi", reply_markup=keyboard)
 
 
-    except Exception as e:
+    except:
 
         progress.cancel()
 
-        await msg.edit_text("❌ Terjadi kesalahan")
+        await msg.edit_text("❌ Error")
 
 
 # =========================
@@ -251,11 +344,37 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user = update.effective_user
-
-    user_data = get_user(user)
-
     choice = query.data
+
+    user = get_user(query.from_user)
+
+
+    if choice == "menu_account":
+        await account_menu(query)
+        return
+
+
+    if choice == "menu_premium":
+        await premium_menu(query)
+        return
+
+
+    if choice == "buy_premium":
+
+        trx = create_tripay(query.from_user.id)
+
+        pay_url = trx["data"]["checkout_url"]
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💳 Bayar Sekarang", url=pay_url)]
+        ])
+
+        await query.message.reply_text(
+            "Klik tombol untuk bayar:",
+            reply_markup=keyboard
+        )
+
+        return
 
 
     if choice.startswith("check_"):
@@ -264,18 +383,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data["format"] = format_choice
 
-
-        # premium skip ads
-        if user_data["premium"]:
+        if user["premium"] or user["download_count"] == 0:
 
             await send_file(query, context)
-            return
 
-
-        # first download skip ads
-        if user_data["download_count"] == 0:
-
-            await send_file(query, context)
             return
 
 
@@ -283,7 +394,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔗 Buka Link", url=ads)],
-            [InlineKeyboardButton("⬇️ Lanjutkan Download", callback_data="continue")]
+            [InlineKeyboardButton("⬇️ Lanjutkan", callback_data="continue")]
         ])
 
         await query.message.reply_text(
@@ -305,6 +416,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_file(query, context):
 
     data = context.user_data.get("data")
+
     format_choice = context.user_data.get("format")
 
     increment_download(query.from_user.id)
@@ -340,7 +452,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(handle_button))
 
-    print("Bot running clean UI version")
+    print("Bot running with account & premium menu")
 
     app.run_polling()
 
