@@ -57,10 +57,7 @@ def main_keyboard(user_id):
     if user_id == ADMIN_ID:
         keyboard.append([KeyboardButton("🛠 Admin")])
 
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True
-    )
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
 # =========================
@@ -104,15 +101,19 @@ def get_user(user):
 
 def increment_download(user_id):
 
-    result = supabase.table("users").select("download_count").eq("id", user_id).execute()
+    result = supabase.table("users") \
+        .select("download_count") \
+        .eq("id", user_id) \
+        .execute()
 
     if result.data:
 
         count = result.data[0]["download_count"] + 1
 
-        supabase.table("users").update({
-            "download_count": count
-        }).eq("id", user_id).execute()
+        supabase.table("users") \
+            .update({"download_count": count}) \
+            .eq("id", user_id) \
+            .execute()
 
 
 # =========================
@@ -121,12 +122,59 @@ def increment_download(user_id):
 
 def get_ads():
 
-    result = supabase.table("ads_links").select("*").eq("active", True).execute()
+    result = supabase.table("ads_links") \
+        .select("*") \
+        .eq("active", True) \
+        .execute()
 
     if result.data:
         return random.choice(result.data)["url"]
 
     return "https://example.com"
+
+
+# =========================
+# ADMIN PANEL
+# =========================
+
+async def show_admin(update):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    keyboard = ReplyKeyboardMarkup(
+        [
+            ["👥 Statistik Users"],
+            ["➕ Tambah Ads"],
+            ["📋 List Ads"],
+            ["❌ Hapus Ads"],
+            ["⬅️ Kembali"]
+        ],
+        resize_keyboard=True
+    )
+
+    await update.message.reply_text(
+        "🛠 Admin Panel",
+        reply_markup=keyboard
+    )
+
+
+async def show_stats(update):
+
+    total_users = supabase.table("users") \
+        .select("id", count="exact") \
+        .execute()
+
+    total_premium = supabase.table("users") \
+        .select("id", count="exact") \
+        .eq("premium", True) \
+        .execute()
+
+    await update.message.reply_text(
+        f"📊 Statistik Bot\n\n"
+        f"👥 Total Users: {total_users.count}\n"
+        f"⭐ Premium Users: {total_premium.count}"
+    )
 
 
 # =========================
@@ -167,7 +215,10 @@ async def show_account(update):
 async def show_premium(update):
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ Beli Premium (50 Stars)", callback_data="buy_premium")]
+        [InlineKeyboardButton(
+            "⭐ Beli Premium (50 Stars)",
+            callback_data="buy_premium"
+        )]
     ])
 
     await update.message.reply_text(
@@ -176,31 +227,6 @@ async def show_premium(update):
         "• Download instan\n"
         "• Prioritas kecepatan\n\n"
         "Harga: 50 Stars / bulan",
-        reply_markup=keyboard
-    )
-
-
-# =========================
-# ADMIN PANEL
-# =========================
-
-async def show_admin(update):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    keyboard = ReplyKeyboardMarkup(
-        [
-            ["➕ Tambah Ads"],
-            ["📋 List Ads"],
-            ["❌ Hapus Ads"],
-            ["⬅️ Kembali"]
-        ],
-        resize_keyboard=True
-    )
-
-    await update.message.reply_text(
-        "🛠 Admin Panel",
         reply_markup=keyboard
     )
 
@@ -273,6 +299,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_admin(update)
         return
 
+    if text == "👥 Statistik Users":
+        if user_id == ADMIN_ID:
+            await show_stats(update)
+        return
+
     if text == "⬅️ Kembali":
         await update.message.reply_text(
             "Menu utama",
@@ -280,7 +311,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ADMIN ADD ADS
+    # ADD ADS
     if context.user_data.get("admin_mode") == "add_ads":
 
         supabase.table("ads_links").insert({
@@ -293,17 +324,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Ads ditambahkan")
         return
 
-    # ADMIN DELETE ADS
+    # DELETE ADS
     if context.user_data.get("admin_mode") == "delete_ads":
 
-        supabase.table("ads_links").delete().eq("id", int(text)).execute()
+        supabase.table("ads_links") \
+            .delete() \
+            .eq("id", int(text)) \
+            .execute()
 
         context.user_data["admin_mode"] = None
 
         await update.message.reply_text("✅ Ads dihapus")
         return
 
-    # ADMIN MENU COMMANDS
     if text == "➕ Tambah Ads":
         context.user_data["admin_mode"] = "add_ads"
         await update.message.reply_text("Kirim link ads")
@@ -318,10 +351,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         result = supabase.table("ads_links").select("*").execute()
 
-        if not result.data:
-            await update.message.reply_text("Tidak ada ads")
-            return
-
         msg = "📋 List Ads\n\n"
 
         for ad in result.data:
@@ -331,6 +360,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # HANDLE TIKTOK LINK
+
     url = re.search(TIKTOK_REGEX, text)
 
     if not url:
@@ -429,7 +459,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    print("Bot running FULL with Admin + Ads + Stars")
+    print("Bot running FULL with Admin + Stats + Ads + Stars")
 
     app.run_polling()
 
