@@ -130,7 +130,22 @@ def get_ads():
     if result.data:
         return random.choice(result.data)["url"]
 
-    return "https://example.com"
+    return None
+
+
+# kirim preview ads tanpa teks
+async def send_ads_preview(chat):
+
+    ad1 = get_ads()
+    ad2 = get_ads()
+
+    if ad1:
+        await chat.reply_text(ad1)
+
+    await asyncio.sleep(1)
+
+    if ad2:
+        await chat.reply_text(ad2)
 
 
 # =========================
@@ -273,9 +288,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "premium_expired": expire.isoformat()
     }).eq("id", user_id).execute()
 
-    await update.message.reply_text(
-        "✅ Premium aktif selama 30 hari!\n\nTerima kasih ⭐"
-    )
+    await update.message.reply_text("✅ Premium aktif")
 
 
 # =========================
@@ -311,32 +324,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ADD ADS
-    if context.user_data.get("admin_mode") == "add_ads":
-
-        supabase.table("ads_links").insert({
-            "url": text,
-            "active": True
-        }).execute()
-
-        context.user_data["admin_mode"] = None
-
-        await update.message.reply_text("✅ Ads ditambahkan")
-        return
-
-    # DELETE ADS
-    if context.user_data.get("admin_mode") == "delete_ads":
-
-        supabase.table("ads_links") \
-            .delete() \
-            .eq("id", int(text)) \
-            .execute()
-
-        context.user_data["admin_mode"] = None
-
-        await update.message.reply_text("✅ Ads dihapus")
-        return
-
     if text == "➕ Tambah Ads":
         context.user_data["admin_mode"] = "add_ads"
         await update.message.reply_text("Kirim link ads")
@@ -359,7 +346,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg)
         return
 
-    # HANDLE TIKTOK LINK
+    if context.user_data.get("admin_mode") == "add_ads":
+
+        supabase.table("ads_links").insert({
+            "url": text,
+            "active": True
+        }).execute()
+
+        context.user_data["admin_mode"] = None
+
+        await update.message.reply_text("✅ Ads ditambahkan")
+        return
+
+    if context.user_data.get("admin_mode") == "delete_ads":
+
+        supabase.table("ads_links") \
+            .delete() \
+            .eq("id", int(text)) \
+            .execute()
+
+        context.user_data["admin_mode"] = None
+
+        await update.message.reply_text("✅ Ads dihapus")
+        return
 
     url = re.search(TIKTOK_REGEX, text)
 
@@ -396,29 +405,23 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_invoice(query, context)
         return
 
-    if query.data == "continue":
-        await send_file(query, context)
-        return
-
     user = get_user(query.from_user)
 
     context.user_data["format"] = query.data.replace("dl_", "")
 
-    if user["premium"] or user["download_count"] == 0:
+    # first download langsung
+    if user["download_count"] == 0:
         await send_file(query, context)
         return
 
-    ads = get_ads()
+    # tampilkan ads jika free
+    if not user["premium"]:
+        await send_ads_preview(query.message)
+        await asyncio.sleep(20)
+    else:
+        await asyncio.sleep(10)
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬇️ Buka Iklan", url=ads)],
-        [InlineKeyboardButton("✅ Lanjutkan Download", callback_data="continue")]
-    ])
-
-    await query.message.reply_text(
-        "Silakan buka iklan terlebih dahulu",
-        reply_markup=keyboard
-    )
+    await send_file(query, context)
 
 
 # =========================
@@ -459,7 +462,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    print("Bot running FULL with Admin + Stats + Ads + Stars")
+    print("Bot running FULL")
 
     app.run_polling()
 
