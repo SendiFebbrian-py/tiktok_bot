@@ -1,10 +1,9 @@
 import os
 import re
-import time
 import asyncio
 import requests
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -49,11 +48,8 @@ TIKTOK_REGEX = r"(https?://[^\s]*tiktok\.com[^\s]*)"
 # =========================
 
 def main_keyboard():
-
     return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("👤 Account"), KeyboardButton("⭐ Premium")]
-        ],
+        [[KeyboardButton("👤 Account"), KeyboardButton("⭐ Premium")]],
         resize_keyboard=True
     )
 
@@ -66,8 +62,25 @@ def get_user(user):
     result = supabase.table("users").select("*").eq("id", user.id).execute()
 
     if result.data:
-        return result.data[0]
 
+        user_data = result.data[0]
+
+        # cek expire premium
+        if user_data.get("premium_expired"):
+
+            expire = datetime.fromisoformat(user_data["premium_expired"])
+
+            if expire < datetime.now(timezone.utc):
+
+                supabase.table("users").update({
+                    "premium": False
+                }).eq("id", user.id).execute()
+
+                user_data["premium"] = False
+
+        return user_data
+
+    # create user baru
     supabase.table("users").insert({
         "id": user.id,
         "username": user.username or "",
@@ -83,9 +96,15 @@ def get_user(user):
 
 def increment_download(user_id):
 
-    supabase.table("users").update({
-        "download_count": supabase.rpc("increment_download", {"uid": user_id})
-    })
+    result = supabase.table("users").select("download_count").eq("id", user_id).execute()
+
+    if result.data:
+
+        count = result.data[0]["download_count"] + 1
+
+        supabase.table("users").update({
+            "download_count": count
+        }).eq("id", user_id).execute()
 
 # =========================
 # ADS
@@ -117,7 +136,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ACCOUNT
 # =========================
 
-async def show_account(update):
+async def show_account(update: Update):
 
     user = get_user(update.effective_user)
 
@@ -133,36 +152,36 @@ async def show_account(update):
 # PREMIUM MENU
 # =========================
 
-async def show_premium(update):
+async def show_premium(update: Update):
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ Beli Premium (15 Stars)", callback_data="buy_premium")]
+        [InlineKeyboardButton("⭐ Beli Premium (50 Stars)", callback_data="buy_premium")]
     ])
 
     await update.message.reply_text(
         "⭐ Premium Plan\n\n"
         "• Tanpa iklan\n"
         "• Download instan\n"
-        "• Akses penuh\n\n"
-        "Harga: 15 Stars / bulan",
+        "• Kecepatan prioritas\n\n"
+        "Harga: 50 Stars / bulan",
         reply_markup=keyboard
     )
 
 # =========================
-# SEND INVOICE (Stars)
+# SEND INVOICE (Telegram Stars)
 # =========================
 
 async def send_invoice(query, context):
 
-    prices = [LabeledPrice("Premium 1 Bulan", 15)]
+    prices = [LabeledPrice("Premium 1 Bulan", 50)]
 
     await context.bot.send_invoice(
         chat_id=query.from_user.id,
         title="Premium Bot",
-        description="Premium 30 hari",
+        description="Premium aktif 30 hari",
         payload="premium",
-        provider_token="",
-        currency="XTR",
+        provider_token="",  # kosong wajib untuk Stars
+        currency="XTR",     # XTR = Telegram Stars
         prices=prices
     )
 
@@ -182,7 +201,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     user_id = update.effective_user.id
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expire = now + timedelta(days=30)
 
     supabase.table("users").update({
@@ -192,7 +211,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }).eq("id", user_id).execute()
 
     await update.message.reply_text(
-        "✅ Premium aktif selama 30 hari!"
+        "✅ Premium aktif selama 30 hari!\n\nTerima kasih telah mendukung bot ini ⭐"
     )
 
 # =========================
@@ -228,20 +247,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("⏳ Memproses...")
 
-    res = requests.get(API_URL, params={"url": url})
+    try:
 
-    data = res.json()["data"]
+        res = requests.get(API_URL, params={"url": url})
+        json_data = res.json()
 
-    context.user_data["data"] = data
+        if "data" not in json_data:
+            await msg.edit_text("❌ Gagal mengambil media")
+            return
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📹 MP4", callback_data="dl_mp4"),
-            InlineKeyboardButton("🎵 MP3", callback_data="dl_mp3")
-        ]
-    ])
+        data = json_data["data"]
 
-    await msg.edit_text("Pilih format:", reply_markup=keyboard)
+        context.user_data["data"] = data
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📹 MP4", callback_data="dl_mp4"),
+                InlineKeyboardButton("🎵 MP3", callback_data="dl_mp3")
+            ]
+        ])
+
+        await msg.edit_text("Pilih format:", reply_markup=keyboard)
+
+    except Exception as e:
+
+        await msg.edit_text("❌ Error mengambil media")
 
 # =========================
 # HANDLE BUTTON
@@ -252,28 +282,36 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # beli premium
     if query.data == "buy_premium":
-
         await send_invoice(query, context)
+        return
+
+    # lanjutkan download
+    if query.data == "continue":
+        await send_file(query, context)
         return
 
     user = get_user(query.from_user)
 
     context.user_data["format"] = query.data.replace("dl_", "")
 
+    # premium atau download pertama skip ads
     if user["premium"] or user["download_count"] == 0:
-
         await send_file(query, context)
         return
 
     ads = get_ads()
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬇️ Download", url=ads)],
-        [InlineKeyboardButton("Lanjutkan", callback_data="continue")]
+        [InlineKeyboardButton("⬇️ Buka Iklan", url=ads)],
+        [InlineKeyboardButton("✅ Lanjutkan Download", callback_data="continue")]
     ])
 
-    await query.message.reply_text("Buka iklan dulu:", reply_markup=keyboard)
+    await query.message.reply_text(
+        "Silakan buka iklan terlebih dahulu",
+        reply_markup=keyboard
+    )
 
 # =========================
 # SEND FILE
@@ -281,14 +319,21 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_file(query, context):
 
-    data = context.user_data["data"]
-    format_choice = context.user_data["format"]
+    data = context.user_data.get("data")
+
+    if not data:
+        await query.message.reply_text("Session expired, kirim link lagi")
+        return
+
+    format_choice = context.user_data.get("format")
+
+    increment_download(query.from_user.id)
 
     if format_choice == "mp4":
 
         await query.message.reply_video(data["play"])
 
-    else:
+    elif format_choice == "mp3":
 
         await query.message.reply_audio(data["music"])
 
@@ -308,14 +353,9 @@ def main():
 
     app.add_handler(PreCheckoutQueryHandler(precheckout))
 
-    app.add_handler(
-        MessageHandler(
-            filters.SUCCESSFUL_PAYMENT,
-            successful_payment
-        )
-    )
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    print("Bot running with Telegram Stars")
+    print("Bot running with Telegram Stars + Ads system")
 
     app.run_polling()
 
